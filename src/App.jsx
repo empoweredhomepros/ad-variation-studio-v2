@@ -2563,7 +2563,7 @@ function StitchTab({ combos, validationStore, preHooks, hooks, transitions, lead
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
-    let downloadUrl = null;
+    let jobId = null;
     let dlFilename = comboName + ".mp4";
 
     while (true) {
@@ -2577,7 +2577,7 @@ function StitchTab({ combos, validationStore, preHooks, hooks, transitions, lead
         try {
           const data = JSON.parse(line.slice(6));
           if (data.status === "done") {
-            downloadUrl = data.downloadUrl;
+            jobId = data.jobId;
             if (data.filename) dlFilename = data.filename;
           } else if (data.status === "error") {
             throw new Error(data.message);
@@ -2590,11 +2590,14 @@ function StitchTab({ combos, validationStore, preHooks, hooks, transitions, lead
       }
     }
 
-    if (!downloadUrl) throw new Error("No download URL received from stitch server.");
+    if (!jobId) throw new Error("No download job received from stitch server.");
 
-    // Auto-download the finished video
+    // Auto-download directly from Railway
     const dlName = dlFilename.endsWith(".mp4") ? dlFilename : dlFilename + ".mp4";
-    const a = document.createElement("a"); a.href = downloadUrl; a.download = dlName; a.click();
+    const a = document.createElement("a");
+    a.href = `${STITCH_URL}/api/download/${jobId}`;
+    a.download = dlName;
+    a.click();
   };
 
   const handleStitchSelected = async () => {
