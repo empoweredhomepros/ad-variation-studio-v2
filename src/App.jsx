@@ -2058,12 +2058,14 @@ function TrackerTab({ combos, onToggle, onSetVideoStatus, onUrlChange, onFilenam
           </div>
         ))}
         {trackerSpeakers.length>0&&(
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 flex-wrap">
             <span className="text-xs text-zinc-500">Speaker:</span>
-            <select value={speakerFilter} onChange={e=>setSpeakerFilter(e.target.value)}
-              className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-amber-500">
-              {["All",...trackerSpeakers].map(o=><option key={o}>{o}</option>)}
-            </select>
+            {["All",...trackerSpeakers].map(name=>(
+              <button key={name} onClick={()=>setSpeakerFilter(name)}
+                className={`px-3 py-1 text-xs rounded-lg border transition-colors ${speakerFilter===name?"bg-amber-500 text-black border-amber-500":"bg-zinc-800 text-zinc-400 border-zinc-700 hover:text-white"}`}>
+                {name}
+              </button>
+            ))}
           </div>
         )}
         <div className="flex items-center gap-1.5">
