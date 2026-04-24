@@ -1331,9 +1331,9 @@ function ValidateTab({ preHooks,hooks,transitions,leads,bodies,ctas,speakers,val
         </div>
 
         {/* Speaker filter */}
-        {scopeSpeakerNames.length>1&&(
-          <div className="space-y-2">
-            <label className="text-xs text-zinc-400 uppercase tracking-widest font-semibold">Filter by speaker</label>
+        <div className="space-y-2">
+          <label className="text-xs text-zinc-400 uppercase tracking-widest font-semibold">Filter by speaker</label>
+          {scopeSpeakerNames.length>1?(
             <div className="flex flex-wrap gap-2">
               {scopeSpeakerNames.map(name=>(
                 <button key={name} onClick={()=>setScopeSpeakerFilter(name)}
@@ -1342,8 +1342,10 @@ function ValidateTab({ preHooks,hooks,transitions,leads,bodies,ctas,speakers,val
                 </button>
               ))}
             </div>
-          </div>
-        )}
+          ):(
+            <p className="text-xs text-zinc-600">No speaker names found — add speaker names to your assets in the Asset Library.</p>
+          )}
+        </div>
 
         {/* Pre-hooks — independent tag filter */}
         <div className="space-y-2">
