@@ -1821,6 +1821,7 @@ function ComboRow({ combo, vr, assetMap, onToggle, onSetVideoStatus, onUrlChange
           </>}
           <span className="font-mono text-amber-400 text-xs font-bold">{combo.hookId}</span>
           {combo.hookDescriptor&&<span className="text-zinc-600 text-xs italic">({combo.hookDescriptor})</span>}
+          {assetMap[combo.hookId]?.speaker&&<span className="text-zinc-300 text-xs font-semibold">{assetMap[combo.hookId].speaker}</span>}
           <span className="text-zinc-600 text-xs">+</span>
           <span className="font-mono text-sky-400 text-xs font-bold">{combo.leadId}</span>
           {combo.transitionId&&<><span className="text-zinc-600 text-xs">+</span><span className="font-mono text-teal-400 text-xs font-bold">{combo.transitionId}</span></>}
@@ -2485,6 +2486,7 @@ function StitchTab({ combos, validationStore, preHooks, hooks, transitions, lead
   const [batchRunning, setBatchRunning] = useState(false);
   const [currentlyStitching, setCurrentlyStitching] = useState(null);
   const [statusLabel, setStatusLabel] = useState("");
+  const [stitchSpeakerFilter, setStitchSpeakerFilter] = useState("All");
   const ffmpegRef = useRef(null);
   const [ffmpegLoaded, setFfmpegLoaded] = useState(false);
 
@@ -2494,18 +2496,32 @@ function StitchTab({ combos, validationStore, preHooks, hooks, transitions, lead
     return m;
   }, [preHooks, hooks, transitions, leads, bodies, ctas]);
 
+  const getVr = (c) => {
+    const fullKey = `${c.preHookId||"none"}+${c.hookId}+${c.leadId}+${c.transitionId||"none"}+${c.bodyId||"none"}+${c.ctaId||"none"}`;
+    const hlKey   = `${c.preHookId||"none"}+${c.hookId}+${c.leadId}+none+none+none`;
+    return validationStore[fullKey] || validationStore[hlKey];
+  };
+
   // Fix key mismatch: fall back to hook+lead-only key
   // If a stitchQueue exists (sent from Tracker), only show those combos
   const validCombos = useMemo(() => {
-    const all = combos.filter(c => {
-      const fullKey = `${c.preHookId||"none"}+${c.hookId}+${c.leadId}+${c.transitionId||"none"}+${c.bodyId||"none"}+${c.ctaId||"none"}`;
-      const hlKey   = `${c.preHookId||"none"}+${c.hookId}+${c.leadId}+none+none+none`;
-      const vr = validationStore[fullKey] || validationStore[hlKey];
-      return vr && vr.valid === true;
-    });
+    const all = combos.filter(c => { const vr = getVr(c); return vr && vr.valid === true; });
     if (stitchQueue && stitchQueue.size > 0) return all.filter(c => stitchQueue.has(c.key));
     return all;
   }, [combos, validationStore, stitchQueue]);
+
+  const stitchSpeakers = useMemo(() => {
+    const names = new Set();
+    validCombos.forEach(c => {
+      const s = assetMap[c.hookId]?.speaker; if (s) names.add(s);
+    });
+    return [...names].sort();
+  }, [validCombos, assetMap]);
+
+  const displayedCombos = useMemo(() => {
+    if (stitchSpeakerFilter === "All") return validCombos;
+    return validCombos.filter(c => assetMap[c.hookId]?.speaker === stitchSpeakerFilter);
+  }, [validCombos, stitchSpeakerFilter, assetMap]);
 
   const getSlots = (combo) => {
     const s = [];
@@ -2669,14 +2685,27 @@ function StitchTab({ combos, validationStore, preHooks, hooks, transitions, lead
             </div>
           )}
 
+          {/* Speaker filter */}
+          {stitchSpeakers.length > 0 && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs text-zinc-500">Speaker:</span>
+              {["All", ...stitchSpeakers].map(name => (
+                <button key={name} onClick={() => setStitchSpeakerFilter(name)}
+                  className={`px-3 py-1 text-xs rounded-lg border transition-colors ${stitchSpeakerFilter === name ? "bg-amber-500 text-black border-amber-500" : "bg-zinc-800 text-zinc-400 border-zinc-700 hover:text-white"}`}>
+                  {name}
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* Toolbar */}
           <div className="flex items-center gap-3 flex-wrap">
             <label className="flex items-center gap-2 cursor-pointer">
               <input type="checkbox" checked={allSelected}
                 ref={el => { if (el) el.indeterminate = selectedCount > 0 && !allSelected; }}
-                onChange={() => setSelectedKeys(allSelected ? new Set() : new Set(validCombos.map(c => c.key)))}
+                onChange={() => setSelectedKeys(allSelected ? new Set() : new Set(displayedCombos.map(c => c.key)))}
                 className="accent-amber-500 w-3.5 h-3.5"/>
-              <span className="text-sm text-zinc-400">{validCombos.length} valid combo{validCombos.length !== 1 ? "s" : ""}</span>
+              <span className="text-sm text-zinc-400">{displayedCombos.length} combo{displayedCombos.length !== 1 ? "s" : ""}</span>
             </label>
             {selectedCount > 0 && (
               <button onClick={handleStitchSelected} disabled={batchRunning || readySelected === 0}
@@ -2698,12 +2727,14 @@ function StitchTab({ combos, validationStore, preHooks, hooks, transitions, lead
 
           {/* Combo list */}
           <div className="space-y-2">
-            {validCombos.map(combo => {
+            {displayedCombos.map(combo => {
               const { ready, total, allReady } = comboReadiness(combo);
               const st = batchStatus[combo.key];
               const isSelected = selectedKeys.has(combo.key);
               const isActive = currentlyStitching === combo.key;
               const slots = getSlots(combo);
+              const vr = getVr(combo);
+              const speaker = assetMap[combo.hookId]?.speaker;
               return (
                 <div key={combo.key} className={`rounded-xl border transition-colors ${
                   isActive      ? "border-amber-500/60 bg-amber-500/8" :
@@ -2714,14 +2745,21 @@ function StitchTab({ combos, validationStore, preHooks, hooks, transitions, lead
                   <div className="flex items-center gap-3 p-3 flex-wrap">
                     <input type="checkbox" checked={isSelected} onChange={() => toggleKey(combo.key)} disabled={batchRunning}
                       className="accent-amber-500 w-3.5 h-3.5 shrink-0"/>
-                    <div className="flex items-center gap-1 flex-1 min-w-0 flex-wrap">
-                      {[combo.preHookId, combo.hookId, combo.leadId, combo.transitionId, combo.bodyId, combo.ctaId].filter(Boolean).map((id, i, arr) => (
-                        <span key={id} className="flex items-center gap-1">
-                          <span className="font-mono text-amber-400 text-xs font-bold">{id}</span>
-                          {i < arr.length - 1 && <span className="text-zinc-600 text-xs">+</span>}
-                        </span>
-                      ))}
-                      <Tag tag={combo.hookTag}/>
+                    <div className="flex flex-col gap-0.5 flex-1 min-w-0">
+                      <div className="flex items-center gap-1 flex-wrap">
+                        {[combo.preHookId, combo.hookId, combo.leadId, combo.transitionId, combo.bodyId, combo.ctaId].filter(Boolean).map((id, i, arr) => (
+                          <span key={id} className="flex items-center gap-1">
+                            <span className="font-mono text-amber-400 text-xs font-bold">{id}</span>
+                            {i < arr.length - 1 && <span className="text-zinc-600 text-xs">+</span>}
+                          </span>
+                        ))}
+                        <Tag tag={combo.hookTag}/>
+                      </div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {speaker && <span className="text-xs text-zinc-300 font-semibold">{speaker}</span>}
+                        {vr?.addedToTrackerAt && <span className="text-xs text-zinc-500">🗂 {fmtDate(vr.addedToTrackerAt)}</span>}
+                        {vr?.validatedAt && <span className="text-xs text-zinc-500">📅 {fmtDate(vr.validatedAt)}</span>}
+                      </div>
                     </div>
                     <span className={`text-xs px-2 py-0.5 rounded-full ${allReady ? "text-emerald-400 bg-emerald-500/15 border border-emerald-500/30" : "text-orange-400 bg-orange-500/15 border border-orange-500/30"}`}>
                       {allReady ? `✓ ${ready}/${total} ready` : `⚠ ${ready}/${total} have video`}
