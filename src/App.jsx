@@ -2526,81 +2526,75 @@ function StitchTab({ combos, validationStore, preHooks, hooks, transitions, lead
   };
 
   const stitchOne = async (combo) => {
-    const ffmpeg = await ensureFFmpeg();
-    const { fetchFile } = await import("@ffmpeg/util");
-    const logs = [];
-    const logHandler = ({ message }) => logs.push(message);
-    ffmpeg.on("log", logHandler);
+    const STITCH_URL = "https://avs-stitch-server-production.up.railway.app";
+    const sb = getSupabase();
+    if (!sb) throw new Error("Supabase not connected — check Admin settings.");
+
     const slots = getSlots(combo);
-    const safe = combo.key.replace(/[^a-z0-9]/gi, "_");
+    const clips = slots.map(slot => ({
+      id: slot.id,
+      storagePath: assetMap[slot.id]?.storagePath || null,
+      driveUrl: assetMap[slot.id]?.driveUrl || null,
+    }));
 
-    // Fetch / write segment files
-    setStatusLabel("Fetching clips & writing segment files…");
-    const fileNames = [];
-    const fromStorage = []; // true = already normalized at upload time
-    for (const slot of slots) {
-      const fname = `seg_${safe}_${slot.id}.mp4`;
-      const file = uploadedFiles[slot.id];
-      const asset = assetMap[slot.id];
-      if (file) {
-        await ffmpeg.writeFile(fname, await fetchFile(file));
-        fromStorage.push(false);
-      } else if (asset?.storagePath) {
-        const signedUrl = await getStorageSignedUrl(asset.storagePath);
-        const resp = await fetch(signedUrl);
-        if (!resp.ok) throw new Error(`Storage fetch failed for ${slot.id}: HTTP ${resp.status}`);
-        await ffmpeg.writeFile(fname, new Uint8Array(await resp.arrayBuffer()));
-        fromStorage.push(true); // normalized at upload time — skip re-encoding
-      } else if (asset?.driveUrl) {
-        const resp = await fetch(`/api/proxy?url=${encodeURIComponent(asset.driveUrl)}`);
-        if (!resp.ok) throw new Error(`Failed to download ${slot.id}: HTTP ${resp.status}`);
-        const ct = resp.headers.get("content-type") || "";
-        if (ct.includes("text/html")) throw new Error(`Drive returned HTML for ${slot.id} — check sharing is set to "Anyone with the link".`);
-        await ffmpeg.writeFile(fname, new Uint8Array(await resp.arrayBuffer()));
-        fromStorage.push(false);
-      } else {
-        throw new Error(`No video source for segment ${slot.id} — add a Drive URL or upload a file.`);
+    // Verify all clips have a source
+    for (const clip of clips) {
+      if (!clip.storagePath && !clip.driveUrl) {
+        throw new Error(`No source for clip "${clip.id}" — add a Drive URL or upload to Storage first.`);
       }
-      fileNames.push(fname);
     }
 
-    // Normalize segments that aren't already normalized (storage clips skip this)
-    const vf = "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,fps=30,format=yuv420p";
-    const normNames = [];
-    for (let i = 0; i < fileNames.length; i++) {
-      if (fromStorage[i]) {
-        // Already normalized at upload time — use as-is
-        normNames.push(fileNames[i]);
-      } else {
-        setStatusLabel(`Normalizing segment ${i+1} of ${fileNames.length}…`);
-        const normName = `norm_${safe}_${i}.mp4`;
-        let r = await ffmpeg.exec(["-i", fileNames[i], "-vf", vf, "-c:v", "libx264", "-preset", "ultrafast", "-map", "0:v:0", "-map", "0:a:0", "-c:a", "aac", "-ar", "44100", "-ac", "2", "-af", "aresample=44100,aformat=channel_layouts=mono,pan=stereo|c0=c0|c1=c0", normName]);
-        if (r !== 0) {
-          r = await ffmpeg.exec(["-i", fileNames[i], "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-vf", vf, "-c:v", "libx264", "-preset", "ultrafast", "-map", "0:v:0", "-map", "1:a", "-c:a", "aac", "-ar", "44100", "-ac", "2", "-af", "aresample=44100,aformat=channel_layouts=mono,pan=stereo|c0=c0|c1=c0", "-shortest", normName]);
-          if (r !== 0) throw new Error(`Could not normalize segment ${i + 1}.\n${logs.slice(-5).join("\n")}`);
+    const comboName = (combo.filename || combo.autoFilename || combo.key).replace(/[^a-zA-Z0-9_-]/g, "_");
+
+    // Call Railway backend via Server-Sent Events
+    setStatusLabel("Connecting to stitch server…");
+    const resp = await fetch(`${STITCH_URL}/api/stitch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clips, comboName, supabaseUrl: sb.url, supabaseKey: sb.key }),
+    });
+
+    if (!resp.ok) {
+      const err = await resp.text();
+      throw new Error(`Stitch server error: ${err}`);
+    }
+
+    // Read SSE progress stream
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let downloadUrl = null;
+    let dlFilename = comboName + ".mp4";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        try {
+          const data = JSON.parse(line.slice(6));
+          if (data.status === "done") {
+            downloadUrl = data.downloadUrl;
+            if (data.filename) dlFilename = data.filename;
+          } else if (data.status === "error") {
+            throw new Error(data.message);
+          } else {
+            setStatusLabel(data.status);
+          }
+        } catch (e) {
+          if (e.message && !e.message.startsWith("JSON")) throw e;
         }
-        normNames.push(normName);
       }
     }
 
-    // Concat normalized segments
-    setStatusLabel("Stitching clips together…");
-    const outName = `out_${safe}.mp4`;
-    await ffmpeg.writeFile("concat_list.txt", normNames.map(f => `file '${f}'`).join("\n"));
-    const ret = await ffmpeg.exec(["-f", "concat", "-safe", "0", "-i", "concat_list.txt", "-c", "copy", "-movflags", "+faststart", outName]);
-    if (ret !== 0) throw new Error(`FFmpeg concat failed.\n${logs.slice(-5).join("\n")}`);
-    for (const f of normNames) { try { await ffmpeg.deleteFile(f); } catch {} }
+    if (!downloadUrl) throw new Error("No download URL received from stitch server.");
 
-    // Download
-    const data = await ffmpeg.readFile(outName);
-    const url = URL.createObjectURL(new Blob([data], { type: "video/mp4" }));
-    const dlName = (combo.filename || combo.autoFilename || combo.key) + ".mp4";
-    const a = document.createElement("a"); a.href = url; a.download = dlName; a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 8000);
-
-    // Cleanup
-    for (const f of [...fileNames, ...normNames, "concat_list.txt", outName]) { try { await ffmpeg.deleteFile(f); } catch {} }
-    ffmpeg.off("log", logHandler);
+    // Auto-download the finished video
+    const dlName = dlFilename.endsWith(".mp4") ? dlFilename : dlFilename + ".mp4";
+    const a = document.createElement("a"); a.href = downloadUrl; a.download = dlName; a.click();
   };
 
   const handleStitchSelected = async () => {
