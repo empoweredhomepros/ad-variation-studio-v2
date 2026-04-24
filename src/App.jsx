@@ -1148,7 +1148,15 @@ function ValidateTab({ preHooks,hooks,transitions,leads,bodies,ctas,speakers,val
   const uniqById=arr=>arr.filter((item,idx,self)=>self.findIndex(x=>x.id===item.id)===idx);
   const visiblePreHooks  =useMemo(()=>uniqById(preHooks).filter(ph=>tagMatch(ph.tag,preHookTagSet)&&bySpeaker(ph)),[preHooks,preHookTagSet,scopeSpeakerFilter]);
   const visibleHooks     =useMemo(()=>uniqById(hooks).filter(h=>tagMatch(h.tag,scopeTagSet)&&bySpeaker(h)),[hooks,scopeTagSet,scopeSpeakerFilter]);
-  const visibleTransitions=useMemo(()=>uniqById(transitions),[transitions]);
+  // Universal transitions are always available; non-universal ones respect the speaker filter
+  const visibleTransitions=useMemo(()=>
+    uniqById(transitions).filter(t=>
+      t.universal ||
+      scopeSpeakerFilter==="All" ||
+      !t.speaker ||
+      t.speaker===scopeSpeakerFilter
+    ),
+  [transitions,scopeSpeakerFilter]);
   const visibleLeads     =useMemo(()=>uniqById(leads).filter(l=>tagMatch(l.tag,scopeTagSet)&&bySpeaker(l)),[leads,scopeTagSet,scopeSpeakerFilter]);
   const visibleBodies  =useMemo(()=>uniqById(bodies).filter(b=>(scopeTagSet.size===0?true:tagMatch(b.tag,scopeTagSet)||b.tag==="Any")&&bySpeaker(b)),[bodies,scopeTagSet,scopeSpeakerFilter]);
   const visibleCtas    =useMemo(()=>uniqById(ctas).filter(c=>(scopeTagSet.size===0?true:tagMatch(c.tag,scopeTagSet)||c.tag==="Any")&&bySpeaker(c)),[ctas,scopeTagSet,scopeSpeakerFilter]);
@@ -1461,7 +1469,9 @@ function ValidateTab({ preHooks,hooks,transitions,leads,bodies,ctas,speakers,val
                 <button key={t.id} onClick={()=>toggle(setSelectedTransitions,()=>visibleTransitions)(t.id)}
                   className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-lg border font-medium transition-colors
                     ${isSelected(selectedTransitions,t.id)?"bg-teal-500/20 border-teal-500/40 text-teal-300":"bg-zinc-800 border-zinc-700 text-zinc-400 hover:text-white"}`}>
-                  <span>{t.id}</span>
+                  <span className="font-mono">{t.id}</span>
+                  {t.speaker&&<span className="font-semibold text-zinc-300">{t.speaker}</span>}
+                  {t.descriptor&&<span className="italic text-zinc-500">({t.descriptor})</span>}
                   <span className={`text-xs px-1 py-0.5 rounded ${t.universal?"bg-teal-500/20 text-teal-400":"bg-zinc-700 text-zinc-500"}`}>{t.universal?"U":"S"}</span>
                 </button>
               ))}
