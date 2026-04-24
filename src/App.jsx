@@ -662,8 +662,10 @@ function LibraryTab({ preHooks,setPreHooks,hooks,transitions,setTransitions,lead
   };
 
   const handleUploadAllToStorage = async () => {
+    const STITCH_URL = "https://avs-stitch-server-production.up.railway.app";
     const clientId = localStorage.getItem("avs_active_client") || "default";
-    if (!getSupabase()) { alert("Connect Supabase in Admin settings first."); return; }
+    const sb = getSupabase();
+    if (!sb) { alert("Connect Supabase in Admin settings first."); return; }
     const toUpload = [];
     sections.forEach(({ label, items }) => {
       items.forEach(item => { if (item.driveUrl && !item.storagePath) toUpload.push({ ...item, _label: label }); });
@@ -671,54 +673,28 @@ function LibraryTab({ preHooks,setPreHooks,hooks,transitions,setTransitions,lead
     if (!toUpload.length) { alert("All clips with Drive URLs are already in storage."); return; }
     setUploadState({ running: true, total: toUpload.length, done: 0, current: "", errors: [] });
 
-    const vf = "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,fps=30,format=yuv420p";
-    const af = "aresample=44100,aformat=channel_layouts=mono,pan=stereo|c0=c0|c1=c0";
-    let ffmpeg;
-    try { ffmpeg = await ensureFFmpeg(); } catch(e) { setUploadState(s=>({...s,running:false,errors:[`FFmpeg failed to load: ${e.message}`]})); return; }
-
     for (let i = 0; i < toUpload.length; i++) {
       const asset = toUpload[i];
       setUploadState(s => ({ ...s, done: i, current: asset.id }));
       try {
-        // Download raw clip (up to 3 attempts)
-        let resp, rawBuffer;
-        for (let attempt = 1; attempt <= 3; attempt++) {
-          resp = await fetch(`/api/proxy?url=${encodeURIComponent(asset.driveUrl)}`);
-          if (resp.ok) { rawBuffer = await resp.arrayBuffer(); break; }
-          if (attempt === 3) throw new Error(`Download failed after 3 attempts: HTTP ${resp.status}`);
-          await new Promise(r => setTimeout(r, 2000 * attempt));
-        }
-        const ct = resp.headers.get("content-type") || "";
-        if (ct.includes("text/html")) throw new Error(`Drive returned HTML — check sharing settings`);
-        if (rawBuffer.byteLength > 45 * 1024 * 1024) throw new Error(`File too large for Supabase free plan (${(rawBuffer.byteLength/1024/1024).toFixed(1)}MB) — upgrade plan or trim clip`);
-        const raw = new Uint8Array(rawBuffer);
-
-        // Normalize with FFmpeg
-        const rawName = `raw_${asset.id}.mp4`;
-        const normName = `norm_${asset.id}.mp4`;
-        await ffmpeg.writeFile(rawName, raw);
-        let r = await ffmpeg.exec(["-i", rawName, "-vf", vf, "-c:v", "libx264", "-preset", "ultrafast", "-map", "0:v:0", "-map", "0:a:0", "-c:a", "aac", "-ar", "44100", "-ac", "2", "-af", af, normName]);
-        if (r !== 0) {
-          r = await ffmpeg.exec(["-i", rawName, "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-vf", vf, "-c:v", "libx264", "-preset", "ultrafast", "-map", "0:v:0", "-map", "1:a", "-c:a", "aac", "-ar", "44100", "-ac", "2", "-af", af, "-shortest", normName]);
-          if (r !== 0) throw new Error(`Normalization failed`);
-        }
-        try { await ffmpeg.deleteFile(rawName); } catch {}
-
-        // Upload normalized file to Supabase Storage
-        const normData = await ffmpeg.readFile(normName);
-        try { await ffmpeg.deleteFile(normName); } catch {}
-        const blob = new Blob([normData], { type: "video/mp4" });
-        const path = `${clientId}/${asset.id}.mp4`;
-        const sb = getSupabase();
-        const up = await fetch(`${sb.url}/storage/v1/object/clips/${path}`, {
+        const resp = await fetch(`${STITCH_URL}/api/normalize`, {
           method: "POST",
-          headers: { "apikey": sb.key, "Authorization": `Bearer ${sb.key}`, "Content-Type": "video/mp4", "x-upsert": "true" },
-          body: blob,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            assetId: asset.id,
+            clientId,
+            driveUrl: asset.driveUrl,
+            supabaseUrl: sb.url,
+            supabaseKey: sb.key,
+          }),
         });
-        if (!up.ok) { const e = await up.text(); throw new Error(e); }
-
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({ error: resp.statusText }));
+          throw new Error(err.error || resp.statusText);
+        }
+        const { storagePath } = await resp.json();
         sections.forEach(({ label, setter }) => {
-          if (label === asset._label) setter(prev => prev.map(a => a.id === asset.id ? { ...a, storagePath: path } : a));
+          if (label === asset._label) setter(prev => prev.map(a => a.id === asset.id ? { ...a, storagePath } : a));
         });
       } catch (err) {
         setUploadState(s => ({ ...s, errors: [...s.errors, `${asset.id}: ${err.message}`] }));
