@@ -900,6 +900,7 @@ function AssetChip({ item, selected, onToggle }) {
         {selected&&<span className="text-black text-xs leading-none font-bold">✓</span>}
       </span>
       <span className="font-mono font-bold">{item.id}</span>
+      {item.speaker&&<span className={`font-semibold truncate max-w-24 ${selected?"text-amber-200":"text-zinc-300"}`}>{item.speaker}</span>}
       {item.descriptor&&<span className="text-zinc-500 italic truncate max-w-20">({item.descriptor})</span>}
       <Tag tag={item.tag}/>
     </button>
@@ -1084,6 +1085,7 @@ function LockModal({ validCount, invalidCount, manualValidCount, onConfirm, onCa
 
 function ValidateTab({ preHooks,hooks,transitions,leads,bodies,ctas,speakers,validationStore,setValidationStore,locked,setLocked,autoAddToTracker,setAutoAddToTracker,validationMode,setValidationMode,anthropicKey,setTab }) {
   const [scopeTagSet,setScopeTagSet]=useState(new Set());
+  const [scopeSpeakerFilter,setScopeSpeakerFilter]=useState("All");
   const [preHookMode,setPreHookMode]=useState("none");
   const [preHookTagSet,setPreHookTagSet]=useState(new Set()); // independent filter
   const [selectedPreHooks,setSelectedPreHooks]=useState(null);
@@ -1111,14 +1113,19 @@ function ValidateTab({ preHooks,hooks,transitions,leads,bodies,ctas,speakers,val
 
   // Pre-hooks use their OWN tag filter — independent of scopeTagSet
   // so an AI pre-hook can pair with Founder hooks etc.
-  const visiblePreHooks  =useMemo(()=>preHooks.filter(ph=>tagMatch(ph.tag,preHookTagSet)),[preHooks,preHookTagSet]);
-  const visibleHooks     =useMemo(()=>hooks.filter(h=>tagMatch(h.tag,scopeTagSet)),[hooks,scopeTagSet]);
+  const scopeSpeakerNames=useMemo(()=>{
+    const names=new Set();
+    [...hooks,...leads,...bodies,...ctas,...preHooks].forEach(i=>{ if(i.speaker) names.add(i.speaker); });
+    return ["All",...Array.from(names).sort()];
+  },[hooks,leads,bodies,ctas,preHooks]);
+  const bySpeaker=i=>scopeSpeakerFilter==="All"||!i.speaker||(i.speaker===scopeSpeakerFilter);
+
+  const visiblePreHooks  =useMemo(()=>preHooks.filter(ph=>tagMatch(ph.tag,preHookTagSet)&&bySpeaker(ph)),[preHooks,preHookTagSet,scopeSpeakerFilter]);
+  const visibleHooks     =useMemo(()=>hooks.filter(h=>tagMatch(h.tag,scopeTagSet)&&bySpeaker(h)),[hooks,scopeTagSet,scopeSpeakerFilter]);
   const visibleTransitions=useMemo(()=>transitions,[transitions]);
-  const visibleLeads     =useMemo(()=>leads.filter(l=>tagMatch(l.tag,scopeTagSet)),[leads,scopeTagSet]);
-  // When a tag scope is active, "Any" assets are included because they are explicitly compatible with all tags.
-  // If you want strict Founder-only, tag your bodies/CTAs as Founder. "Any" means "works with everything".
-  const visibleBodies  =useMemo(()=>bodies.filter(b=>scopeTagSet.size===0 ? true : tagMatch(b.tag,scopeTagSet)||b.tag==="Any"),[bodies,scopeTagSet]);
-  const visibleCtas    =useMemo(()=>ctas.filter(c=>scopeTagSet.size===0 ? true : tagMatch(c.tag,scopeTagSet)||c.tag==="Any"),[ctas,scopeTagSet]);
+  const visibleLeads     =useMemo(()=>leads.filter(l=>tagMatch(l.tag,scopeTagSet)&&bySpeaker(l)),[leads,scopeTagSet,scopeSpeakerFilter]);
+  const visibleBodies  =useMemo(()=>bodies.filter(b=>(scopeTagSet.size===0?true:tagMatch(b.tag,scopeTagSet)||b.tag==="Any")&&bySpeaker(b)),[bodies,scopeTagSet,scopeSpeakerFilter]);
+  const visibleCtas    =useMemo(()=>ctas.filter(c=>(scopeTagSet.size===0?true:tagMatch(c.tag,scopeTagSet)||c.tag==="Any")&&bySpeaker(c)),[ctas,scopeTagSet,scopeSpeakerFilter]);
 
   const preHooksToRun=useMemo(()=>{
     if(preHookMode==="none") return [null];
@@ -1323,6 +1330,21 @@ function ValidateTab({ preHooks,hooks,transitions,leads,bodies,ctas,speakers,val
           {scopeTagSet.size>0&&<p className="text-xs text-amber-400">Showing {[...scopeTagSet].join(" + ")} assets only.</p>}
         </div>
 
+        {/* Speaker filter */}
+        {scopeSpeakerNames.length>1&&(
+          <div className="space-y-2">
+            <label className="text-xs text-zinc-400 uppercase tracking-widest font-semibold">Filter by speaker</label>
+            <div className="flex flex-wrap gap-2">
+              {scopeSpeakerNames.map(name=>(
+                <button key={name} onClick={()=>setScopeSpeakerFilter(name)}
+                  className={`px-3 py-1 text-xs rounded-lg border transition-colors ${scopeSpeakerFilter===name?"bg-amber-500 text-black border-amber-500":"bg-zinc-800 text-zinc-400 border-zinc-700 hover:text-white"}`}>
+                  {name}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Pre-hooks — independent tag filter */}
         <div className="space-y-2">
           <div className="flex items-center justify-between">
@@ -1330,7 +1352,10 @@ function ValidateTab({ preHooks,hooks,transitions,leads,bodies,ctas,speakers,val
               <label className="text-xs text-zinc-400 uppercase tracking-widest font-semibold">Pre-hooks {preHookMode!=="none"&&<span className="text-rose-400 font-bold ml-1 normal-case">{preHooksToRun.length} selected</span>}</label>
               <p className="text-xs text-zinc-600 mt-0.5">Independent tag filter — an AI pre-hook can pair with any Founder or UGC hook.</p>
             </div>
-            {preHookMode==="pick"&&<button onClick={()=>setSelectedPreHooks(null)} className="text-xs text-zinc-500 hover:text-zinc-300 shrink-0">Select all</button>}
+            {preHookMode==="pick"&&<div className="flex gap-2 shrink-0">
+              <button onClick={()=>setSelectedPreHooks(null)} className="text-xs text-zinc-500 hover:text-zinc-300">Select all</button>
+              <button onClick={()=>setSelectedPreHooks(new Set())} className="text-xs text-zinc-500 hover:text-zinc-300">Deselect all</button>
+            </div>}
           </div>
           <div className="flex gap-2 flex-wrap">
             {[{val:"none",label:"Skip"},{val:"all",label:"All pre-hooks"},{val:"pick",label:"Pick specific"}].map(opt=>(
@@ -1358,7 +1383,10 @@ function ValidateTab({ preHooks,hooks,transitions,leads,bodies,ctas,speakers,val
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <label className="text-xs text-zinc-400 uppercase tracking-widest font-semibold">Hooks <span className="text-amber-400 font-bold ml-1 normal-case">{hooksToRun.length} selected</span></label>
-            <button onClick={()=>setSelectedHooks(null)} className="text-xs text-zinc-500 hover:text-zinc-300">Select all</button>
+            <div className="flex gap-2">
+              <button onClick={()=>setSelectedHooks(null)} className="text-xs text-zinc-500 hover:text-zinc-300">Select all</button>
+              <button onClick={()=>setSelectedHooks(new Set())} className="text-xs text-zinc-500 hover:text-zinc-300">Deselect all</button>
+            </div>
           </div>
           <div className="flex flex-wrap gap-2">
             {visibleHooks.length===0?<span className="text-zinc-600 text-xs">No hooks match.</span>
@@ -1370,7 +1398,10 @@ function ValidateTab({ preHooks,hooks,transitions,leads,bodies,ctas,speakers,val
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <label className="text-xs text-zinc-400 uppercase tracking-widest font-semibold">Leads <span className="text-sky-400 font-bold ml-1 normal-case">{leadsToRun.length} selected</span></label>
-            <button onClick={()=>setSelectedLeads(null)} className="text-xs text-zinc-500 hover:text-zinc-300">Select all</button>
+            <div className="flex gap-2">
+              <button onClick={()=>setSelectedLeads(null)} className="text-xs text-zinc-500 hover:text-zinc-300">Select all</button>
+              <button onClick={()=>setSelectedLeads(new Set())} className="text-xs text-zinc-500 hover:text-zinc-300">Deselect all</button>
+            </div>
           </div>
           <div className="flex flex-wrap gap-2">
             {visibleLeads.length===0?<span className="text-zinc-600 text-xs">No leads match.</span>
@@ -1383,7 +1414,10 @@ function ValidateTab({ preHooks,hooks,transitions,leads,bodies,ctas,speakers,val
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <label className="text-xs text-zinc-400 uppercase tracking-widest font-semibold">Transitions {transitionMode!=="none"&&<span className="text-teal-400 font-bold ml-1 normal-case">{transitionsToRun.length} selected</span>}</label>
-              {transitionMode==="pick"&&<button onClick={()=>setSelectedTransitions(null)} className="text-xs text-zinc-500 hover:text-zinc-300">Select all</button>}
+              {transitionMode==="pick"&&<div className="flex gap-2">
+                <button onClick={()=>setSelectedTransitions(null)} className="text-xs text-zinc-500 hover:text-zinc-300">Select all</button>
+                <button onClick={()=>setSelectedTransitions(new Set())} className="text-xs text-zinc-500 hover:text-zinc-300">Deselect all</button>
+              </div>}
             </div>
             <div className="flex gap-2 flex-wrap">
               {[{val:"none",label:"Skip"},{val:"all",label:"All transitions"},{val:"pick",label:"Pick specific"}].map(opt=>(
@@ -1411,7 +1445,10 @@ function ValidateTab({ preHooks,hooks,transitions,leads,bodies,ctas,speakers,val
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <label className="text-xs text-zinc-400 uppercase tracking-widest font-semibold">Bodies {bodyMode!=="none"&&<span className="text-purple-400 font-bold ml-1 normal-case">{bodiesToRun.length} selected</span>}</label>
-            {bodyMode==="pick"&&<button onClick={()=>setSelectedBodies(null)} className="text-xs text-zinc-500 hover:text-zinc-300">Select all</button>}
+            {bodyMode==="pick"&&<div className="flex gap-2">
+              <button onClick={()=>setSelectedBodies(null)} className="text-xs text-zinc-500 hover:text-zinc-300">Select all</button>
+              <button onClick={()=>setSelectedBodies(new Set())} className="text-xs text-zinc-500 hover:text-zinc-300">Deselect all</button>
+            </div>}
           </div>
           <div className="flex gap-2 flex-wrap">
             {[{val:"none",label:"Skip"},{val:"all",label:"All bodies"},{val:"pick",label:"Pick specific"}].map(opt=>(
@@ -1431,7 +1468,10 @@ function ValidateTab({ preHooks,hooks,transitions,leads,bodies,ctas,speakers,val
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <label className="text-xs text-zinc-400 uppercase tracking-widest font-semibold">CTAs {ctaMode!=="none"&&<span className="text-pink-400 font-bold ml-1 normal-case">{ctasToRun.length} selected</span>}</label>
-            {ctaMode==="pick"&&<button onClick={()=>setSelectedCtas(null)} className="text-xs text-zinc-500 hover:text-zinc-300">Select all</button>}
+            {ctaMode==="pick"&&<div className="flex gap-2">
+              <button onClick={()=>setSelectedCtas(null)} className="text-xs text-zinc-500 hover:text-zinc-300">Select all</button>
+              <button onClick={()=>setSelectedCtas(new Set())} className="text-xs text-zinc-500 hover:text-zinc-300">Deselect all</button>
+            </div>}
           </div>
           <div className="flex gap-2 flex-wrap">
             {[{val:"none",label:"Skip"},{val:"all",label:"All CTAs"},{val:"pick",label:"Pick specific"}].map(opt=>(
