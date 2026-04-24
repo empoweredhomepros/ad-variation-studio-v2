@@ -189,14 +189,14 @@ function SpeakerCombobox({ value, onChange, speakers }) {
   );
 }
 
-function AssetRow({ item, onDelete, onUpdate, validMark, speakers, selected, onSelect }) {
+function AssetRow({ item, onDelete, onUpdate, validMark, speakers, selected, onSelect, isDuplicate }) {
   const [editing,setEditing]=useState(false);
   const [draft,setDraft]=useState(item);
   const [videoPanel,setVideoPanel]=useState(false);
   const [driveMode,setDriveMode]=useState(item.driveUrl?"drive":"upload");
   const hasVideo=item.videoFileName||item.driveUrl;
-  const borderColor=selected?"border-amber-500/50":validMark==="valid"?"border-emerald-500/25":validMark==="invalid"?"border-red-500/20":"border-zinc-700/50";
-  const bgColor=selected?"bg-amber-500/5":validMark==="valid"?"bg-emerald-500/5":validMark==="invalid"?"bg-red-500/5":"bg-zinc-800/60";
+  const borderColor=isDuplicate?"border-red-500/50":selected?"border-amber-500/50":validMark==="valid"?"border-emerald-500/25":validMark==="invalid"?"border-red-500/20":"border-zinc-700/50";
+  const bgColor=isDuplicate?"bg-red-500/5":selected?"bg-amber-500/5":validMark==="valid"?"bg-emerald-500/5":validMark==="invalid"?"bg-red-500/5":"bg-zinc-800/60";
 
 
   if (editing) return (
@@ -257,7 +257,10 @@ function AssetRow({ item, onDelete, onUpdate, validMark, speakers, selected, onS
           style={selected?{opacity:1}:{}}
         />
         <div className="flex-shrink-0 pt-0.5">
-          <div className="font-mono text-amber-400 text-sm font-bold">{item.id}</div>
+          <div className="flex items-center gap-1.5">
+            <span className="font-mono text-amber-400 text-sm font-bold">{item.id}</span>
+            {isDuplicate&&<span className="text-xs bg-red-500/20 text-red-400 border border-red-500/30 px-1.5 py-0 rounded-full" title="Duplicate ID — select and delete the extra copy">⚠ dup</span>}
+          </div>
           {item.descriptor&&<div className="text-zinc-500 text-xs mt-0.5 italic">"{item.descriptor}"</div>}
         </div>
         <div className="flex-1 min-w-0 text-zinc-300 text-sm leading-snug">{item.text}</div>
@@ -636,6 +639,16 @@ function LibraryTab({ preHooks,setPreHooks,hooks,transitions,setTransitions,lead
   const hookMarks=useMemo(()=>{ const m={}; Object.values(validationStore).forEach(v=>{ const hid=v.hookId; if(!(hid in m)) m[hid]=v.valid; else if(m[hid]!==v.valid) m[hid]="mixed"; }); return m; },[validationStore]);
   const leadMarks=useMemo(()=>{ const m={}; Object.values(validationStore).forEach(v=>{ const lid=v.leadId; if(!(lid in m)) m[lid]=v.valid; else if(m[lid]!==v.valid) m[lid]="mixed"; }); return m; },[validationStore]);
   const getMark=(label,id)=>{ const val=label==="Hooks"?hookMarks[id]:label==="Leads"?leadMarks[id]:undefined; if(val===true) return "valid"; if(val===false) return "invalid"; return undefined; };
+  // Track IDs that appear more than once within their section
+  const dupIdsBySec=useMemo(()=>{
+    const result={};
+    sections.forEach(({label,items})=>{
+      const seen={};
+      items.forEach(i=>{ seen[i.id]=(seen[i.id]||0)+1; });
+      result[label]=new Set(Object.keys(seen).filter(id=>seen[id]>1));
+    });
+    return result;
+  },[sections]);
   const filterItems=items=>items.filter(i=>{
     const matchSearch=search===""||i.id.toLowerCase().includes(search.toLowerCase())||i.text.toLowerCase().includes(search.toLowerCase())||(i.descriptor||"").toLowerCase().includes(search.toLowerCase())||(i.speaker||"").toLowerCase().includes(search.toLowerCase());
     const matchSpeaker=speakerFilter==="All"||(speakerFilter==="(none)"?(!(i.speaker||"").trim()):(i.speaker||""===speakerFilter||(i.speaker||"")===speakerFilter));
@@ -653,12 +666,21 @@ function LibraryTab({ preHooks,setPreHooks,hooks,transitions,setTransitions,lead
   },[speakers,preHooks,hooks,leads,bodies,ctas]);
 
   const handleImport=(buckets)=>{
-    if(buckets.prehooks?.length)     setPreHooks(prev=>[...prev,...buckets.prehooks]);
-    if(buckets.hooks?.length)        setHooks(prev=>[...prev,...buckets.hooks]);
-    if(buckets.transitions?.length)  setTransitions(prev=>[...prev,...buckets.transitions]);
-    if(buckets.leads?.length)        setLeads(prev=>[...prev,...buckets.leads]);
-    if(buckets.bodies?.length)       setBodies(prev=>[...prev,...buckets.bodies]);
-    if(buckets.ctas?.length)         setCtas(prev=>[...prev,...buckets.ctas]);
+    // Merge by ID: update existing items with imported data, append new IDs only
+    const mergeById=(prev,incoming)=>{
+      if(!incoming?.length) return prev;
+      const incomingMap=Object.fromEntries(incoming.map(i=>[i.id,i]));
+      const existingIds=new Set(prev.map(i=>i.id));
+      const merged=prev.map(i=>incomingMap[i.id]?{...i,...incomingMap[i.id]}:i);
+      incoming.forEach(i=>{ if(!existingIds.has(i.id)) merged.push(i); });
+      return merged;
+    };
+    if(buckets.prehooks?.length)     setPreHooks(prev=>mergeById(prev,buckets.prehooks));
+    if(buckets.hooks?.length)        setHooks(prev=>mergeById(prev,buckets.hooks));
+    if(buckets.transitions?.length)  setTransitions(prev=>mergeById(prev,buckets.transitions));
+    if(buckets.leads?.length)        setLeads(prev=>mergeById(prev,buckets.leads));
+    if(buckets.bodies?.length)       setBodies(prev=>mergeById(prev,buckets.bodies));
+    if(buckets.ctas?.length)         setCtas(prev=>mergeById(prev,buckets.ctas));
   };
 
   const handleUploadAllToStorage = async () => {
@@ -775,6 +797,7 @@ function LibraryTab({ preHooks,setPreHooks,hooks,transitions,setTransitions,lead
           const filtered=filterItems(items);
           const allSel=filtered.length>0&&filtered.every(i=>selectedIds.has(`${label}|${i.id}`));
           const someSel=filtered.some(i=>selectedIds.has(`${label}|${i.id}`));
+          const dupIds=dupIdsBySec[label]||new Set();
           return (
             <div key={label}>
               <div className="flex items-center gap-2 mb-3">
@@ -788,12 +811,13 @@ function LibraryTab({ preHooks,setPreHooks,hooks,transitions,setTransitions,lead
                 />
                 <h3 className="text-white font-bold text-sm uppercase tracking-widest">{label}</h3>
                 <span className="text-xs text-zinc-500 bg-zinc-800 px-2 py-0.5 rounded-full">{filtered.length}</span>
+                {dupIds.size>0&&<span className="text-xs bg-red-500/20 text-red-400 border border-red-500/30 px-2 py-0.5 rounded-full" title={`Duplicate IDs: ${[...dupIds].join(", ")} — select and delete the extras`}>⚠ {dupIds.size} duplicate{dupIds.size!==1?"s":""}</span>}
               </div>
               <div className="space-y-2">
                 {filtered.map(item=>{
                   const key=`${label}|${item.id}`;
                   return (
-                    <AssetRow key={item.id} item={item} validMark={getMark(label,item.id)} speakers={speakers}
+                    <AssetRow key={`${item.id}_${filtered.indexOf(item)}`} item={item} validMark={getMark(label,item.id)} speakers={speakers} isDuplicate={dupIds.has(item.id)}
                       selected={selectedIds.has(key)}
                       onSelect={val=>toggleSelect(key,val)}
                       onUpdate={patch=>updateItem(setter,item.id,patch)}
@@ -1120,12 +1144,14 @@ function ValidateTab({ preHooks,hooks,transitions,leads,bodies,ctas,speakers,val
   },[hooks,leads,bodies,ctas,preHooks]);
   const bySpeaker=i=>scopeSpeakerFilter==="All"||!i.speaker||(i.speaker===scopeSpeakerFilter);
 
-  const visiblePreHooks  =useMemo(()=>preHooks.filter(ph=>tagMatch(ph.tag,preHookTagSet)&&bySpeaker(ph)),[preHooks,preHookTagSet,scopeSpeakerFilter]);
-  const visibleHooks     =useMemo(()=>hooks.filter(h=>tagMatch(h.tag,scopeTagSet)&&bySpeaker(h)),[hooks,scopeTagSet,scopeSpeakerFilter]);
-  const visibleTransitions=useMemo(()=>transitions,[transitions]);
-  const visibleLeads     =useMemo(()=>leads.filter(l=>tagMatch(l.tag,scopeTagSet)&&bySpeaker(l)),[leads,scopeTagSet,scopeSpeakerFilter]);
-  const visibleBodies  =useMemo(()=>bodies.filter(b=>(scopeTagSet.size===0?true:tagMatch(b.tag,scopeTagSet)||b.tag==="Any")&&bySpeaker(b)),[bodies,scopeTagSet,scopeSpeakerFilter]);
-  const visibleCtas    =useMemo(()=>ctas.filter(c=>(scopeTagSet.size===0?true:tagMatch(c.tag,scopeTagSet)||c.tag==="Any")&&bySpeaker(c)),[ctas,scopeTagSet,scopeSpeakerFilter]);
+  // Deduplicate by ID before any further filtering (safety net for data already in storage)
+  const uniqById=arr=>arr.filter((item,idx,self)=>self.findIndex(x=>x.id===item.id)===idx);
+  const visiblePreHooks  =useMemo(()=>uniqById(preHooks).filter(ph=>tagMatch(ph.tag,preHookTagSet)&&bySpeaker(ph)),[preHooks,preHookTagSet,scopeSpeakerFilter]);
+  const visibleHooks     =useMemo(()=>uniqById(hooks).filter(h=>tagMatch(h.tag,scopeTagSet)&&bySpeaker(h)),[hooks,scopeTagSet,scopeSpeakerFilter]);
+  const visibleTransitions=useMemo(()=>uniqById(transitions),[transitions]);
+  const visibleLeads     =useMemo(()=>uniqById(leads).filter(l=>tagMatch(l.tag,scopeTagSet)&&bySpeaker(l)),[leads,scopeTagSet,scopeSpeakerFilter]);
+  const visibleBodies  =useMemo(()=>uniqById(bodies).filter(b=>(scopeTagSet.size===0?true:tagMatch(b.tag,scopeTagSet)||b.tag==="Any")&&bySpeaker(b)),[bodies,scopeTagSet,scopeSpeakerFilter]);
+  const visibleCtas    =useMemo(()=>uniqById(ctas).filter(c=>(scopeTagSet.size===0?true:tagMatch(c.tag,scopeTagSet)||c.tag==="Any")&&bySpeaker(c)),[ctas,scopeTagSet,scopeSpeakerFilter]);
 
   const preHooksToRun=useMemo(()=>{
     if(preHookMode==="none") return [null];
@@ -3211,11 +3237,13 @@ export default function App() {
     localStorage.setItem("avs_active_client", activeClientId);
     isMounting.current=true;
     loadClientData(activeClientId).then(d=>{
-      setPreHooks(d.preHooks||[]);
-      setHooks(d.hooks||[]);
-      setTransitions(d.transitions||[]);
-      setLeads(d.leads||[]);
-      setBodies(d.bodies||[]);
+      // Deduplicate by ID (safety net for any already-stored duplicates)
+      const dedup=arr=>(arr||[]).filter((item,idx,self)=>self.findIndex(x=>x.id===item.id)===idx);
+      setPreHooks(dedup(d.preHooks));
+      setHooks(dedup(d.hooks));
+      setTransitions(dedup(d.transitions));
+      setLeads(dedup(d.leads));
+      setBodies(dedup(d.bodies));
       setCtas(d.ctas||[]);
       setSpeakers(d.speakers||[]);
       setComboData(d.comboData||{});
